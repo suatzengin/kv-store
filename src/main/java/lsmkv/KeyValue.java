@@ -1,3 +1,3 @@
-package lsmkv_old2.lsmkv;
+package lsmkv;
 
 public record KeyValue(byte[] key, byte[] value) {}

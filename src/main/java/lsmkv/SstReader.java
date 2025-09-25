@@ -1,4 +1,4 @@
-package lsmkv_old2.lsmkv;
+package lsmkv;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -8,55 +8,55 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.Optional;
 
-public final class SstReader implements AutoCloseable {
-    private final Path path;
-
-    public SstReader(Path path) {
-        this.path = path;
-    }
+public record SstReader(Path path) {
 
     public Optional<Entry> get(byte[] key) throws IOException {
-        // naive scan with per-block crc validation; in practice use index+bloom for narrowing (omitted for brevity)
-        try (FileChannel ch = FileChannel.open(path, StandardOpenOption.READ)) {
-            long size = ch.size();
+        // TODO simple scan with per-block crc validation; in practice use index+bloom for narrowing (omitted for brevity)
+        try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) {
+            long size = channel.size();
             long pos = 0;
-            ByteBuffer hdr = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);
+            ByteBuffer header = ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN);
             while (pos + 8 <= size) {
-                hdr.clear();
-                int r = ch.read(hdr, pos);
-                if (r < 8) break;
-                hdr.flip();
-                int crc = hdr.getInt();
-                int blen = hdr.getInt();
-                if (pos + 8 + blen > size) break;
-                ByteBuffer body = ByteBuffer.allocate(blen).order(ByteOrder.LITTLE_ENDIAN);
-                ch.read(body, pos + 8);
+                // 1) Read block header
+                header.clear();
+                int numBytesRead = channel.read(header, pos);
+                if (numBytesRead < 8) break;        // short read -> stop
+                header.flip();
+                int crc = header.getInt();     // expected CRC32C
+                int bodyLength = header.getInt();    // body length
+
+                if (pos + 8 + bodyLength > size) break;       // truncated tail -> stop
+
+                // 2) Read block body
+                ByteBuffer body = ByteBuffer.allocate(bodyLength).order(ByteOrder.LITTLE_ENDIAN);
+                channel.read(body, pos + 8);
                 body.flip();
-                // verify crc
+
+                // 3) Verify block CRC
                 byte[] arr = new byte[body.remaining()];
                 body.get(arr);
-                if (Codec.crc32c(arr) != crc) break;
-                // parse entries in block
-                ByteBuffer bb = ByteBuffer.wrap(arr).order(ByteOrder.LITTLE_ENDIAN);
-                while (bb.hasRemaining()) {
-                    byte flag = bb.get();
-                    int klen = bb.getInt();
-                    int vlen = bb.getInt();
+                if (Codec.crc32c(arr) != crc) break;        // corruption -> stop file scan
+
+                // 4) Parse entries inside the block
+                ByteBuffer buffer = ByteBuffer.wrap(arr).order(ByteOrder.LITTLE_ENDIAN);
+                while (buffer.hasRemaining()) {
+                    byte flag = buffer.get();
+                    int klen = buffer.getInt();
+                    int vlen = buffer.getInt();
                     byte[] k = new byte[klen];
-                    bb.get(k);
+                    buffer.get(k);
                     byte[] v = new byte[vlen];
-                    if (vlen > 0) bb.get(v);
-                    int cmp = ByteArrays.compare(k, key);
-                    if (cmp == 0) {
-                        if (flag == Entry.FLAG_DEL) return Optional.empty();
+                    if (vlen > 0) buffer.get(v);
+                    if (ByteArrays.compare(k, key) == 0) {
+                        if (flag == Entry.FLAG_DEL) return Optional.empty();        // tombstone
                         return Optional.of(new Entry(0, flag, k, vlen == 0 ? null : v));
                     }
                 }
-                pos += 8 + blen;
+
+                // 5) Advance to next block
+                pos += 8 + bodyLength;
             }
         }
         return Optional.empty();
     }
-
-    @Override public void close() throws IOException {}
 }

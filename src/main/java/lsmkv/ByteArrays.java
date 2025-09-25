@@ -1,10 +1,10 @@
-package lsmkv_old2.lsmkv;
+package lsmkv;
 
-import java.util.Arrays;
 import java.util.Comparator;
 
 public final class ByteArrays {
-    private ByteArrays() {}
+    private ByteArrays() {
+    }
 
     public static int compare(byte[] a, byte[] b) {
         int len = Math.min(a.length, b.length);
@@ -17,10 +17,4 @@ public final class ByteArrays {
     }
 
     public static final Comparator<byte[]> LEX = ByteArrays::compare;
-
-    public static byte[] concat(byte[] a, byte[] b) {
-        byte[] out = Arrays.copyOf(a, a.length + b.length);
-        System.arraycopy(b, 0, out, a.length, b.length);
-        return out;
-    }
 }
